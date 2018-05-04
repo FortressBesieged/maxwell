@@ -12,7 +12,7 @@ binlog_format=row
 
 ### Properties file
 ***
-If maxwell finds the file `config.properties` in $PWD it will use it.  Any
+If Maxwell finds the file `config.properties` in $PWD it will use it.  Any
 command line options (except `init_position`, `replay`, and `kafka_version`) may be given as
 "key=value" pairs.
 
@@ -26,6 +26,20 @@ kafka.batch.size=16384
 
 then Maxwell will send `batch.size=16384` to the kafka producer library.
 
+### Scoped environment variables
+***
+If `--env_config_prefix` configuration param is defined, for example, `--env_config_prefix=MAXWELL_`, or it is defined in the `config.properties` file, Maxwell will look up
+all the environment variables that start with `MAXWELL_` and strip off the prefix. The scoped environment variable names are case insensitive.
+For instance if env contains
+```
+MAXWELL_USER=mysql_user
+```
+then Maxwell will get `user=mysql_user` config.
+
+The configuration priority is
+```
+command line options > scoped env vars > properties file > default values
+```
 
 ### GTID support
 ***
@@ -200,6 +214,7 @@ secret_key                     | STRING                              | specify t
 **monitoring**
 metrics_prefix | STRING | the prefix maxwell will apply to all metrics | MaxwellMetrics
 metrics_type         | [slf4j &#124; jmx &#124; http &#124; datadog]      | how maxwell metrics will be reported, at least one of slf4j &#124; jmx &#124; http &#124; datadog|
+metrics_jvm          | BOOLEAN                                            | enable jvm metrics, e.g. memory usage, GC stats, etc.| false
 metrics_slf4j_interval     | INT                                 | the frequency metrics are emitted to the log, in seconds, when slf4j reporting is configured | 60
 metrics_http_port         | INT                                 | the port the server will bind to when http reporting is configured (deprecated: use http_port) | 8080
 http_port                 | INT                                 | the port the server will bind to when http reporting is configured | 8080
