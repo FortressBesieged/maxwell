@@ -3,6 +3,8 @@ package com.zendesk.maxwell;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.health.HealthCheckRegistry;
 import com.github.shyiko.mysql.binlog.network.SSLMode;
+import com.zendesk.maxwell.filtering.Filter;
+import com.zendesk.maxwell.filtering.InvalidFilterException;
 import com.zendesk.maxwell.monitoring.MaxwellDiagnosticContext;
 import com.zendesk.maxwell.producer.EncryptionMode;
 import com.zendesk.maxwell.producer.MaxwellOutputConfig;
@@ -31,12 +33,13 @@ public class MaxwellConfig extends AbstractConfig {
 	public MaxwellMysqlConfig schemaMysql;
 
 	public MaxwellMysqlConfig maxwellMysql;
-	public MaxwellFilter filter;
+	public Filter filter;
 	public Boolean gtidMode;
 
 	public String databaseName;
 
 	public String includeDatabases, excludeDatabases, includeTables, excludeTables, excludeColumns, blacklistDatabases, blacklistTables, includeColumnValues;
+	public String filterList;
 
 	public ProducerFactory producerFactory; // producerFactory has precedence over producerType
 	public final Properties customProducerProperties;
@@ -186,7 +189,7 @@ public class MaxwellConfig extends AbstractConfig {
 			+ "comma separated.").withRequiredArg();
 		parser.accepts( "producer_partition_by_fallback", "database|table|primary_key, fallback to this value when using 'column' partitioning and the columns are not present in the row").withRequiredArg();
 
-		parser.accepts( "kafka_version", "kafka client library version: 0.8.2.2|0.9.0.1|0.10.0.1|0.10.2.1|0.11.0.1").withRequiredArg();
+		parser.accepts( "kafka_version", "kafka client library version: 0.8.2.2|0.9.0.1|0.10.0.1|0.10.2.1|0.11.0.1|1.0.0").withRequiredArg();
 		parser.accepts( "kafka_partition_by", "[deprecated]").withRequiredArg();
 		parser.accepts( "kafka_partition_columns", "[deprecated]").withRequiredArg();
 		parser.accepts( "kafka_partition_by_fallback", "[deprecated]").withRequiredArg();
@@ -213,6 +216,7 @@ public class MaxwellConfig extends AbstractConfig {
 		parser.accepts( "output_thread_id", "produced records include thread_id; [true|false]. default: false" ).withOptionalArg();
 		parser.accepts( "output_row_query", "produced records include query, binlog option \"binlog_rows_query_log_events\" must be enabled; [true|false]. default: false" ).withOptionalArg();
 		parser.accepts( "output_ddl", "produce DDL records to ddl_kafka_topic [true|false]. default: false" ).withOptionalArg();
+		parser.accepts( "exclude_columns", "suppress these comma-separated columns from output" ).withRequiredArg();
 		parser.accepts( "ddl_kafka_topic", "optionally provide an alternate topic to push DDL records to. default: kafka_topic" ).withRequiredArg();
 		parser.accepts("secret_key", "The secret key for the AES encryption" ).withRequiredArg();
 		parser.accepts("encrypt", "encryption mode: [none|data|all]. default: none" ).withRequiredArg();
@@ -226,8 +230,8 @@ public class MaxwellConfig extends AbstractConfig {
 		parser.accepts( "replica_server_id", "server_id that maxwell reports to the master.  See docs for full explanation. ").withRequiredArg();
 		parser.accepts( "client_id", "unique identifier for this maxwell replicator" ).withRequiredArg();
 		parser.accepts( "schema_database", "database name for maxwell state (schema and binlog position)" ).withRequiredArg();
-		parser.accepts( "max_schemas", "deprecated." ).withRequiredArg();
-		parser.accepts( "init_position", "initial binlog position, given as BINLOG_FILE:POSITION:HEARTBEAT" ).withRequiredArg();
+		parser.accepts( "max_schemas", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "init_position", "initial binlog position, given as BINLOG_FILE:POSITION[:HEARTBEAT]" ).withRequiredArg();
 		parser.accepts( "replay", "replay mode, don't store any information to the server" ).withOptionalArg();
 		parser.accepts( "master_recovery", "(experimental) enable master position recovery code" ).withOptionalArg();
 		parser.accepts( "gtid_mode", "(experimental) enable gtid mode" ).withOptionalArg();
@@ -235,14 +239,14 @@ public class MaxwellConfig extends AbstractConfig {
 
 		parser.accepts( "__separator_7" );
 
-		parser.accepts( "include_dbs", "include these databases, formatted as include_dbs=db1,db2" ).withRequiredArg();
-		parser.accepts( "exclude_dbs", "exclude these databases, formatted as exclude_dbs=db1,db2" ).withRequiredArg();
-		parser.accepts( "include_tables", "include these tables, formatted as include_tables=db1,db2" ).withRequiredArg();
-		parser.accepts( "exclude_tables", "exclude these tables, formatted as exclude_tables=tb1,tb2" ).withRequiredArg();
-		parser.accepts( "exclude_columns", "exclude these columns, formatted as exclude_columns=col1,col2" ).withRequiredArg();
-		parser.accepts( "blacklist_dbs", "ignore data AND schema changes to these databases, formatted as blacklist_dbs=db1,db2. See the docs for details before setting this!" ).withRequiredArg();
-		parser.accepts( "blacklist_tables", "ignore data AND schema changes to these tables, formatted as blacklist_tables=tb1,tb2. See the docs for details before setting this!" ).withRequiredArg();
-		parser.accepts( "include_column_values", "include only rows with these values formatted as include_column_values=C=x,D=y" ).withRequiredArg();
+		parser.accepts( "include_dbs", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "exclude_dbs", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "include_tables", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "exclude_tables", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "blacklist_dbs", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "blacklist_tables", "[deprecated]" ).withRequiredArg();
+		parser.accepts( "filter", "filter specs.  specify like \"include:db.*, exclude:*.tbl, include: foo./.*bar$/, exclude:foo.bar.baz=reject\"").withRequiredArg();
+		parser.accepts( "include_column_values", "[deprecated]" ).withRequiredArg();
 
 		parser.accepts( "__separator_8" );
 
@@ -267,7 +271,7 @@ public class MaxwellConfig extends AbstractConfig {
 		parser.accepts( "redis_database", "Database of Redis server" ).withRequiredArg();
 		parser.accepts( "redis_pub_channel", "Redis Pub/Sub channel for publishing records" ).withRequiredArg();
 		parser.accepts( "redis_list_key", "Redis LPUSH List Key for adding to a queue" ).withRequiredArg();
-		parser.accepts( "redis_type", "Selects either Redis Pub/Sub or LPUSH. Default to Pub/Sub" ).withRequiredArg();
+		parser.accepts( "redis_type", "[pubsub|lpush] Selects either Redis Pub/Sub or LPUSH. Defaults to 'pubsub'" ).withRequiredArg();
 
 		parser.accepts( "__separator_10" );
 
@@ -457,13 +461,14 @@ public class MaxwellConfig extends AbstractConfig {
 		this.excludeTables       = fetchOption("exclude_tables", options, properties, null);
 		this.blacklistDatabases  = fetchOption("blacklist_dbs", options, properties, null);
 		this.blacklistTables     = fetchOption("blacklist_tables", options, properties, null);
+		this.filterList          = fetchOption("filter", options, properties, null);
 		this.includeColumnValues = fetchOption("include_column_values", options, properties, null);
 
 		if ( options != null && options.has("init_position")) {
 			String initPosition = (String) options.valueOf("init_position");
 			String[] initPositionSplit = initPosition.split(":");
 
-			if (initPositionSplit.length != 3)
+			if (initPositionSplit.length < 2)
 				usageForOptions("Invalid init_position: " + initPosition, "--init_position");
 
 			Long pos = 0L;
@@ -474,10 +479,12 @@ public class MaxwellConfig extends AbstractConfig {
 			}
 
 			Long lastHeartbeat = 0L;
-			try {
-				lastHeartbeat = Long.valueOf(initPositionSplit[2]);
-			} catch (NumberFormatException e) {
-				usageForOptions("Invalid init_position: " + initPosition, "--init_position");
+			if ( initPositionSplit.length > 2 ) {
+				try {
+					lastHeartbeat = Long.valueOf(initPositionSplit[2]);
+				} catch (NumberFormatException e) {
+					usageForOptions("Invalid init_position: " + initPosition, "--init_position");
+				}
 			}
 
 			this.initPosition = new Position(new BinlogPosition(pos, initPositionSplit[0]), lastHeartbeat);
@@ -557,8 +564,44 @@ public class MaxwellConfig extends AbstractConfig {
 
 	}
 
+	private void validateFilter() {
+		if ( this.filter != null )
+			return;
+		try {
+			if ( this.filterList != null ) {
+				this.filter = new Filter(filterList);
+			} else {
+				boolean hasOldStyleFilters =
+					includeDatabases != null ||
+						excludeDatabases != null ||
+						includeTables != null ||
+						excludeTables != null ||
+						blacklistDatabases != null ||
+						blacklistTables != null ||
+						includeColumnValues != null;
+
+				if ( hasOldStyleFilters ) {
+					this.filter = Filter.fromOldFormat(
+						includeDatabases,
+						excludeDatabases,
+						includeTables,
+						excludeTables,
+						blacklistDatabases,
+						blacklistTables,
+						includeColumnValues
+					);
+				} else {
+					this.filter = new Filter();
+				}
+			}
+		} catch (InvalidFilterException e) {
+			usageForOptions("Invalid filter options: " + e.getLocalizedMessage(), "filter");
+		}
+	}
+
 	public void validate() {
 		validatePartitionBy();
+		validateFilter();
 
 		if ( this.producerType.equals("kafka") ) {
 			if ( !this.kafkaProperties.containsKey("bootstrap.servers") ) {
@@ -646,21 +689,6 @@ public class MaxwellConfig extends AbstractConfig {
 			this.schemaMysql.sslMode = this.maxwellMysql.sslMode;
 		}
 
-		if ( this.filter == null ) {
-			try {
-				this.filter = new MaxwellFilter(
-					includeDatabases,
-					excludeDatabases,
-					includeTables,
-					excludeTables,
-					blacklistDatabases,
-					blacklistTables,
-					includeColumnValues
-				);
-			} catch (MaxwellInvalidFilterException e) {
-				usage("Invalid filter options: " + e.getLocalizedMessage());
-			}
-		}
 
 		if ( this.metricsDatadogType.contains("http") && StringUtils.isEmpty(this.metricsDatadogAPIKey) ) {
 			usageForOptions("please specify metrics_datadog_apikey when metrics_datadog_type = http");
@@ -670,7 +698,7 @@ public class MaxwellConfig extends AbstractConfig {
 			for ( String s : this.excludeColumns.split(",") ) {
 				try {
 					outputConfig.excludeColumns.add(compileStringToPattern(s));
-				} catch ( MaxwellInvalidFilterException e ) {
+				} catch ( InvalidFilterException e ) {
 					usage("invalid exclude_columns: '" + this.excludeColumns + "': " + e.getMessage());
 				}
 			}
@@ -690,11 +718,11 @@ public class MaxwellConfig extends AbstractConfig {
 		return this.kafkaProperties;
 	}
 
-	public static Pattern compileStringToPattern(String name) throws MaxwellInvalidFilterException {
+	public static Pattern compileStringToPattern(String name) throws InvalidFilterException {
 		name = name.trim();
 		if ( name.startsWith("/") ) {
 			if ( !name.endsWith("/") ) {
-				throw new MaxwellInvalidFilterException("Invalid regular expression: " + name);
+				throw new InvalidFilterException("Invalid regular expression: " + name);
 			}
 			return Pattern.compile(name.substring(1, name.length() - 1));
 		} else {
