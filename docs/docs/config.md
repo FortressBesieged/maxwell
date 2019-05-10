@@ -24,6 +24,7 @@ client_id                      | STRING               | unique text identifier f
 replica_server_id              | LONG                 | unique numeric identifier for this maxwell instance | 6379 (see [notes](#multiple-maxwell-instances))
 master_recovery                | BOOLEAN              | enable experimental master recovery code            | false
 gtid_mode                      | BOOLEAN              | enable GTID-based replication                       | false
+recapture_schema               | BOOLEAN              | recapture the latest schema. Not available in config.properties. | false
 &nbsp;
 replication_host               | STRING               | server to replicate from.  See [split server roles](#split-server-roles) | *schema-store host*
 replication_password           | STRING               | password on replication server                      | (none)
@@ -44,14 +45,16 @@ producer_ack_timeout           | [PRODUCER_ACK_TIMEOUT](#ack_timeout) | time in 
 producer_partition_by          | [PARTITION_BY](#partition_by)       | input to kafka/kinesis partition function           | database
 producer_partition_columns     | STRING                              | if partitioning by 'column', a comma separated list of columns |
 producer_partition_by_fallback | [PARTITION_BY_FALLBACK](#partition_by_fallback) | required when producer_partition_by=column.  Used when the column is missing |
-ignore_producer_error          | BOOLEAN              | Maxwell will be terminated on kafka/kinesis errors when false. Otherwise, those producer errors are only logged. | true
+ignore_producer_error          | BOOLEAN              | When false, Maxwell will terminate on kafka/kinesis publish errors (aside from RecordTooLargeException). When true, errors are only logged. See also dead_letter_topic | true
 &nbsp;
 **"file" producer options**
 output_file                    | STRING                              | output file for `file` producer                     |
+javascript                     | STRING                              | file containing javascript filters |
 &nbsp;
 **"kafka" producer options **
 kafka.bootstrap.servers        | STRING                              | kafka brokers, given as `HOST:PORT[,HOST:PORT]`     |
 kafka_topic                    | STRING                              | kafka topic to write to.                            | maxwell
+dead_letter_topic              | STRING                              | the topic to write a "skeleton row" (a row where `data` includes only primary key columns) when there's an error publishing a row. When `ignore_producer_error` is `false`, only RecordTooLargeException causes a fallback record to be published, since other errors cause termination. Currently only supported in Kafka publisher |
 kafka_version                  | [KAFKA_VERSION](#kafka_version)     | run maxwell with specified kafka producer version.  Not available in config.properties. | 0.11.0.1
 kafka_partition_hash           | [ default &#124; murmur3 ]          | hash function to use when choosing kafka partition   | default
 kafka_key_format               | [ array &#124; hash ]               | how maxwell outputs kafka keys, either a hash or an array of hashes | hash
@@ -99,8 +102,10 @@ output_xoffset                 | BOOLEAN  | records include virtual tx-row offse
 output_nulls                   | BOOLEAN  | records include fields with NULL values    | true
 output_server_id               | BOOLEAN  | records include server_id                  | false
 output_thread_id               | BOOLEAN  | records include thread_id                  | false
+output_schema_id               | BOOLEAN  | records include schema_id, schema_id is the id of the latest schema tracked by maxwell and doesn't relate to any mysql tracked value                  | false
 output_row_query               | BOOLEAN  | records include INSERT/UPDATE/DELETE statement. Mysql option "binlog_rows_query_log_events" must be enabled | false
 output_ddl                     | BOOLEAN  | output DDL (table-alter, table-create, etc) events  | false
+output_null_zerodates          | BOOLEAN  | should we transform '0000-00-00' to null? | false
 &nbsp;
 **filtering**
 filter                         | STRING            | filter rules, eg `exclude: db.*, include: *.tbl, include: *./bar(bar)?/, exclude: foo.bar.col=val` |
@@ -141,10 +146,10 @@ PRODUCER_TYPE: [ stdout &#124; file &#124; kafka &#124; kinesis &#124; pubsub &#
 DEFAULT_JDBC_OPTS: zeroDateTimeBehavior=convertToNull&amp;connectTimeout=5000
 </p>
 <p id="partition_by" class="jumptarget">
-PARTITION_BY: [ database &#124; table &#124; primary_key &#124; column ]
+PARTITION_BY: [ database &#124; table &#124; primary_key &#124; transaction_id &#124; column ]
 </p>
 <p id="partition_by_fallback" class="jumptarget">
-PARTITION_BY_FALLBACK: [ database &#124; table &#124; primary_key ]
+PARTITION_BY_FALLBACK: [ database &#124; table &#124; primary_key &#124; transaction_id ]
 </p>
 <p id="kafka_version" class="jumptarget">
 KAFKA_VERSION: [ 0.8.2.2 &#124; 0.9.0.1 &#124; 0.10.0.1 &#124; 0.10.2.1 &#124; 0.11.0.1 ]
@@ -168,19 +173,10 @@ command line options > scoped env vars > properties file > default values
 
 #### config.properties
 
-If Maxwell finds the file `config.properties` in $PWD it will use it.  Any
-command line options (except `init_position`, `replay`, `kafka_version` and
-`daemon`) may be given as "key=value" pairs.
-
-Additionally, any configuration file options prefixed with 'kafka.' will be
-passed into the kafka producer library, after having 'kafka.' stripped off the
-front of the key.  So, for example if config.properties contains
-
-```
-kafka.batch.size=16384
-```
-
-then Maxwell will send `batch.size=16384` to the kafka producer library.
+Maxwell can be configured via a java properties file, specified via `--config`
+or named "config.properties" in the current working directory.
+Any command line options (except `init_position`, `replay`, `kafka_version` and
+`daemon`) may be specified as "key=value" pairs.
 
 #### via environment
 If `env_config_prefix` given via command line or in `config.properties`, Maxwell
@@ -205,7 +201,8 @@ binlog_format=row
 
 #### GTID support
 As of 1.8.0, Maxwell contains support for
-[GTID-based replication](https://dev.mysql.com/doc/refman/5.6/en/replication-gtids.html).  Enable it with the `--gtid_mode` configuration param.
+[GTID-based replication](https://dev.mysql.com/doc/refman/5.6/en/replication-gtids.html).
+Enable it with the `--gtid_mode` configuration param.
 
 Here's how you might configure your mysql server for GTID mode:
 
@@ -225,7 +222,7 @@ When in GTID-mode, Maxwell will transparently pick up a new replication
 position after a master change.  Note that you will still have to re-point
 maxwell to the new master.
 
-GTID support in Maxwell is considered alpha-quality at the moment; notably,
+GTID support in Maxwell is considered beta-quality at the moment; notably,
 Maxwell is unable to transparently upgrade from a traditional-replication
 scenario to a GTID-replication scenario; currently, when you enable gtid mode
 Maxwell will recapture the schema and GTID-position from "wherever the master
@@ -249,11 +246,8 @@ Maxwell uses MySQL for 3 different functions:
 3. A host to capture the schema from (`--schema_host`).
 
 Often, all three hosts are the same.  `host` and `replication_host` should be different
-if mysql is chained off a slave.  `schema_host` should only be used when using the
+if maxwell is chained off a replica.  `schema_host` should only be used when using the
 maxscale replication proxy.
-
-Note that bootstrapping is currently not available when `host` and
-`replication_host` are separate, due to some implementation details.
 
 #### Multiple Maxwell Instances
 
@@ -267,66 +261,4 @@ With MySQL 5.5 and below, each replicator (be it mysql, maxwell, whatever) must
 also be configured with a unique `replica_server_id`.  This is a 32-bit integer
 that corresponds to mysql's `server_id` parameter.  The value you configure
 should be unique across all mysql and maxwell instances.
-
-### Filtering
-***
-
-#### Example 1
-Maxwell can be configured to filter out updates from specific tables.  This is controlled
-by the `--filter` command line flag.  Here's how that flag looks:
-
-```
---filter = "exclude: foodb.*, include: foodb.tbl, include: foodb./table_\d+/"
-```
-
-This example tells Maxwell to suppress all updates that happen on `foodb`, except for updates
-to `tbl` and any table in foodb matching the regexp `/table_\d+/`.
-#### Example 2
-
-Filter options are evaluated in the order specified, so in this example we
-suppress everything except updates in the `db1` database.
-
-```
---filter = "exclude: *.*, include: db1.*"
-```
-
-
-#### Column Filters
-Maxwell can also include/exclude based on column values:
-
-```
---filter = "exclude: db.tbl.col = reject"
-```
-
-will reject any row in `db.tbl` that contains `col` and where the stringified value of "col" is "reject".
-
-#### Column Filters / Missing Columns
-Column filters are ignored if the specified column is not present, so:
-
-```
---filter = "exclude: *.*.col_a = *"
-```
-
-will exclude updates to any table that contains `col_a`, but include every other table.
-
-
-#### Blacklisting tables
-
-In rare cases, you may wish to tell Maxwell to completely ignore a database or
-table, including schema changes.  In general, don't use this.  If you must use this:
-
-```
---filter = "blacklist: bad_db.*"
-```
-
-Note that once Maxwell has been running with a table or database marked as
-blacklisted, you *must* continue to run Maxwell with that table or database
-blacklisted or else Maxwell will halt. If you want to stop
-blacklisting a table or database, you will have to drop the maxwell schema first.
-
-#### Supressing columns
-
-If you wish to suppress columns from Maxwell's output (for instance, a password field),
-you can use `exclude_columns` to filter out columns by name.
-
 

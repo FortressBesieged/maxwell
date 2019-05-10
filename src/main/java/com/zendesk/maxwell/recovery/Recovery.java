@@ -4,6 +4,7 @@ import com.zendesk.maxwell.CaseSensitivity;
 import com.zendesk.maxwell.MaxwellMysqlConfig;
 import com.zendesk.maxwell.monitoring.Metrics;
 import com.zendesk.maxwell.monitoring.NoOpMetrics;
+import com.zendesk.maxwell.producer.MaxwellOutputConfig;
 import com.zendesk.maxwell.replication.BinlogConnectorReplicator;
 import com.zendesk.maxwell.replication.BinlogPosition;
 import com.zendesk.maxwell.replication.HeartbeatNotifier;
@@ -68,10 +69,11 @@ public class Recovery {
 					position,
 					true,
 					recoveryInfo.clientID,
-					new HeartbeatNotifier()
+					new HeartbeatNotifier(),
+					null,
+					new RecoveryFilter(this.maxwellDatabaseName),
+					new MaxwellOutputConfig()
 			);
-
-			replicator.setFilter(new RecoveryFilter(this.maxwellDatabaseName));
 
 			HeartbeatRowMap h = findHeartbeat(replicator);
 			if ( h != null ) {

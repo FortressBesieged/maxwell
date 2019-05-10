@@ -1,5 +1,148 @@
 # Maxwell changelog
 
+### [v1.22.0](https://github.com/zendesk/maxwell/releases/tag/v1.22.0): "through the roof, and underground"
+
+
+- Bootstrapping has been reworked and is now available in all setups,
+including those in which the maxwell store is split from the replicator.
+- cleanup and fix a deadlock in the kafka fallback queue logic
+- add .partition_string = to javascript filters
+
+
+### [v1.21.1](https://github.com/zendesk/maxwell/releases/tag/v1.21.1): "ohhhhhh oh oh"
+
+
+- Upgrade binlog connector.  Should fix issues around deserialization
+errors.
+
+
+### [v1.21.0](https://github.com/zendesk/maxwell/releases/tag/v1.21.0): "through the roof"
+
+
+- Bootstrapping output no longer contain binlog positions.  Please update
+  any code that relies on this.
+- Fix 3 parser issues.
+
+
+### [v1.20.0](https://github.com/zendesk/maxwell/releases/tag/v1.20.0): "and so you learn the only way to go is"
+
+
+- add support for partitioning by transaction ID thx @hexene
+- add support for a kafka "fallback" topic to write to
+  when a message fails to write
+- add UJIS charset support
+- parser bug: multiple strings concatenate to make one default string
+- parser bug: deal with bizarre column renames which are then referenced
+  in AFTER column statements
+
+
+### [v1.19.7](https://github.com/zendesk/maxwell/releases/tag/v1.19.7): "in every corner of your room"
+
+
+- fix a parser error with empty sql comments
+- interpret latin-1 as windows-1252, not iso-whatever, thx @borleaandrei
+
+
+### [v1.19.6](https://github.com/zendesk/maxwell/releases/tag/v1.19.6): "set up for you"
+
+
+- Further fixes for GTID-reconnection issues.
+- Crash sanely when GTID-enabled maxwell is connected to clearly the wrong master,
+  thanks @acampoh
+
+
+### [v1.19.5](https://github.com/zendesk/maxwell/releases/tag/v1.19.5): "when there is trap"
+
+
+- Fixes for unreliable connections wrt to GTID events; previously we
+  restart in any old position, now we throw away the current transaction
+  and restart the replicator again at the head of the GTID event.
+
+
+### [v1.19.4](https://github.com/zendesk/maxwell/releases/tag/v1.19.4): "and underground"
+
+
+- Fixes for a maxwell database not making it through the blacklist
+- Add `output_null_zerodates` parameter to control how we treat
+  '0000-00-00'
+
+
+### [v1.19.3](https://github.com/zendesk/maxwell/releases/tag/v1.19.3): "through the roof"
+
+
+- Add a universal backpressure mechanism.  This should help people who
+were running into out-of-memory situations while bootstrapping.
+
+
+### [v1.19.2](https://github.com/zendesk/maxwell/releases/tag/v1.19.2): "the same I wore last night"
+
+
+- Include schema_id in bootstrap events
+- add more logging around binlog connector losing connection
+- add retry logic to redis
+- some aws fixes
+- allow pushing JS hashes/arrays into data from js filters
+
+ - list changes
+
+
+### [v1.19.1](https://github.com/zendesk/maxwell/releases/tag/v1.19.1): "the swoop here doesn't change things one bit"
+
+
+- Handle mysql bit literals in DEFAULT statements
+- blacklist out CREATE ROLE etc
+- upgrade dependencies to pick up security issues
+
+
+### [v1.19.0](https://github.com/zendesk/maxwell/releases/tag/v1.19.0): "whole lotta milka"
+
+
+- mysql 8 support!
+- utf8 enum values are supported now
+- fix #1125, bootstrapping issue for TINYINT(1)
+- fix #1145, nasty bug around SQL blacklist and columns starting with "begin"
+- only resume bootstraps that are targeted at this client_id
+- fixes for blacklists and heartbeats.  Did I ever mention blacklists
+  are a terrible idea?
+
+
+### [v1.18.0](https://github.com/zendesk/maxwell/releases/tag/v1.18.0): "hello from the Andes"
+
+
+- memory optimizations for large schemas (especially shareded schemas with lots of duplicates)
+- add support for an http endpoint to support Prometheus metrics
+- allow javascript filters to access the row query object
+- javascript filters now run in the bootstrap process
+- support for non-latin1 column names
+- add `--output_schema_id` option
+- better handling of packet-too-big errors from Kinesis
+- add message.publish.age metric
+
+
+### [v1.17.1](https://github.com/zendesk/maxwell/releases/tag/v1.17.1): "ay, ay, ay"
+
+
+- fix a regression around filters + bootstrapping
+- fix a regression around filters + database-only-ddl
+
+
+### [v1.17.0](https://github.com/zendesk/maxwell/releases/tag/v1.17.0): "monday, not sunday tuesday"
+
+
+v1.17.0 brings a new level of configurability by allowing you to inject
+a bit of javascript into maxwell's processing.  Should be useful!  Also:
+
+- fix regression for Alibaba RDS tables
+
+
+### [v1.16.1](https://github.com/zendesk/maxwell/releases/tag/v1.16.1): "the 90 degree angle thing"
+
+
+- Fix Bootstrapping for JSON columns
+- add --recapture_schema flag for when ya wanna start over
+- add kafka 1.0 libraries, make them default
+
+
 ### [v1.16.0](https://github.com/zendesk/maxwell/releases/tag/v1.16.0): "kind of sort of a reference to something"
 
 

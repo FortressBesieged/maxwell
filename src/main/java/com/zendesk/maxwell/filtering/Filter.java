@@ -10,15 +10,30 @@ public class Filter {
 	static final Logger LOGGER = LoggerFactory.getLogger(Filter.class);
 
 	private final List<FilterPattern> patterns;
+	private String maxwellDB;
 
 	public Filter() {
 		this.patterns = new ArrayList<>();
+		this.maxwellDB = "maxwell";
 	}
-
 	public Filter(String filterString) throws InvalidFilterException {
 		this();
-
 		patterns.addAll(new FilterParser(filterString).parse());
+	}
+
+	public Filter(String maxwellDB, String filterString) throws InvalidFilterException {
+		this();
+		this.maxwellDB = maxwellDB;
+		patterns.addAll(new FilterParser(filterString).parse());
+	}
+
+	public boolean isSystemWhitelisted(String database, String table) {
+		return isMaxwellDB(database)
+			&& ("bootstrap".equals(table) || "heartbeats".equals(table));
+	}
+
+	public boolean isMaxwellDB(String database) {
+		return maxwellDB.equals(database);
 	}
 
 	public void addRule(String filterString) throws InvalidFilterException {
@@ -56,7 +71,14 @@ public class Filter {
 		return false;
 	}
 
+
 	public boolean isTableBlacklisted(String database, String table) {
+		if ( isSystemBlacklisted(database, table) )
+			return true;
+
+		if ( isMaxwellDB(database) )
+			return false;
+
 		FilterResult match = new FilterResult();
 
 		for ( FilterPattern p : patterns ) {
@@ -68,6 +90,9 @@ public class Filter {
 	}
 
 	public boolean isDatabaseBlacklisted(String database) {
+		if ( isMaxwellDB(database) )
+			return false;
+
 		for ( FilterPattern p : patterns ) {
 			if (p.getType() == FilterPatternType.BLACKLIST &&
 				p.getDatabasePattern().matcher(database).find() &&
@@ -108,6 +133,7 @@ public class Filter {
 	}
 
 	public static Filter fromOldFormat(
+		String maxwellDB,
 		String includeDatabases,
 		String excludeDatabases,
 		String includeTables,
@@ -166,6 +192,6 @@ public class Filter {
 		LOGGER.warn("using exclude/include/includeColumns is deprecated.  Please update your configuration to use: ");
 		LOGGER.warn("filter = \"" + filterRulesAsString + "\"");
 
-		return new Filter(filterRulesAsString);
+		return new Filter(maxwellDB, filterRulesAsString);
 	}
 }

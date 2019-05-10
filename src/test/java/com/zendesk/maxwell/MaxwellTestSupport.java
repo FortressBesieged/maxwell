@@ -3,7 +3,9 @@ package com.zendesk.maxwell;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.shyiko.mysql.binlog.network.SSLMode;
 import com.zendesk.maxwell.filtering.Filter;
+import com.zendesk.maxwell.filtering.InvalidFilterException;
 import com.zendesk.maxwell.producer.MaxwellOutputConfig;
+import com.zendesk.maxwell.replication.MysqlVersion;
 import com.zendesk.maxwell.replication.Position;
 import com.zendesk.maxwell.row.RowMap;
 import com.zendesk.maxwell.schema.Schema;
@@ -21,12 +23,15 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assume.assumeTrue;
 
 public class MaxwellTestSupport {
 	static final Logger LOGGER = LoggerFactory.getLogger(MaxwellTestSupport.class);
@@ -121,15 +126,32 @@ public class MaxwellTestSupport {
 		return new MaxwellContext(config);
 	}
 
+	public static boolean inGtidMode() {
+		return System.getenv(MaxwellConfig.GTID_MODE_ENV) != null;
+	}
+
+	public static Position capture(Connection c) throws SQLException {
+		return Position.capture(c, inGtidMode());
+	}
+
+
 	private static void clearSchemaStore(MysqlIsolatedServer mysql) throws Exception {
 		mysql.execute("drop database if exists maxwell");
 	}
 
-	public static List<RowMap> getRowsWithReplicator(final MysqlIsolatedServer mysql, Filter filter, final String queries[], final String before[]) throws Exception {
+	//public static List<RowMap> getRowsWithReplicator(final MysqlIsolatedServer mysql, Filter filter, final String queries[], final String before[]) throws Exception {
+	//}
+
+	public static List<RowMap> getRowsWithReplicator(
+		final MysqlIsolatedServer mysql,
+		final String queries[],
+		final String before[],
+		final Consumer<MaxwellConfig> configLambda
+	) throws Exception {
 		MaxwellTestSupportCallback callback = new MaxwellTestSupportCallback() {
 			@Override
 			public void afterReplicatorStart(MysqlIsolatedServer mysql) throws SQLException {
-				 mysql.executeList(Arrays.asList(queries));
+				mysql.executeList(Arrays.asList(queries));
 			}
 
 			@Override
@@ -139,18 +161,14 @@ public class MaxwellTestSupport {
 			}
 		};
 
-		return getRowsWithReplicator(mysql, filter, callback, null);
+		return getRowsWithReplicator(mysql, callback, configLambda);
 	}
 
-	public static boolean inGtidMode() {
-		return System.getenv(MaxwellConfig.GTID_MODE_ENV) != null;
-	}
-
-	public static Position capture(Connection c) throws SQLException {
-		return Position.capture(c, inGtidMode());
-	}
-
-	public static List<RowMap> getRowsWithReplicator(final MysqlIsolatedServer mysql, Filter filter, MaxwellTestSupportCallback callback, MaxwellOutputConfig outputConfig) throws Exception {
+	public static List<RowMap> getRowsWithReplicator(
+		final MysqlIsolatedServer mysql,
+		MaxwellTestSupportCallback callback,
+		Consumer<MaxwellConfig> configLambda
+	) throws Exception {
 		final ArrayList<RowMap> list = new ArrayList<>();
 
 		clearSchemaStore(mysql);
@@ -163,21 +181,16 @@ public class MaxwellTestSupport {
 		config.maxwellMysql.port = mysql.getPort();
 		config.maxwellMysql.sslMode = SSLMode.DISABLED;
 		config.replicationMysql = config.maxwellMysql;
-		if (outputConfig == null) {
-			outputConfig = new MaxwellOutputConfig();
-		}
+		if ( configLambda != null )
+			configLambda.accept(config);
 
-		if ( filter != null ) {
-			filter.addRule("include: test.*");
-		}
-
-		config.filter = filter;
 		config.bootstrapperType = "sync";
+		config.validate();
 
 		callback.beforeReplicatorStart(mysql);
 
 		config.initPosition = capture(mysql.getConnection());
-		final String waitObject = new String("");
+		final String waitObject = "";
 		final BufferedMaxwell maxwell = new BufferedMaxwell(config) {
 			@Override
 			protected void onReplicatorStart() {
@@ -208,11 +221,13 @@ public class MaxwellTestSupport {
 		}
 
 		callback.afterReplicatorStart(mysql);
+		maxwell.context.getBootstrapController(null).interrupt();
+
 		long finalHeartbeat = maxwell.context.getPositionStore().heartbeat();
 
 		LOGGER.debug("running replicator up to heartbeat: " + finalHeartbeat);
 
-		Long pollTime = 2000L;
+		Long pollTime = 5000L;
 		Position lastPositionRead = null;
 
 		for ( ;; ) {
@@ -226,20 +241,20 @@ public class MaxwellTestSupport {
 
 			lastPositionRead = row.getPosition();
 
-			if ( lastPositionRead.getLastHeartbeatRead() >= finalHeartbeat ) {
+			if ( lastPositionRead != null && lastPositionRead.getLastHeartbeatRead() >= finalHeartbeat ) {
 				// consume whatever's left over in the buffer.
 				for ( ;; ) {
 					RowMap r = maxwell.poll(100);
 					if ( r == null )
 						break;
 
-					if ( r.toJSON(outputConfig) != null )
+					if ( r.toJSON(config.outputConfig) != null )
 						list.add(r);
 				}
 
 				break;
 			}
-			if ( row.toJSON(outputConfig) != null )
+			if ( row.toJSON(config.outputConfig) != null )
 				list.add(row);
 		}
 
@@ -284,5 +299,10 @@ public class MaxwellTestSupport {
 
 		List<String> diff = topSchema.diff(bottomSchema, "followed schema", "recaptured schema");
 		assertThat(StringUtils.join(diff.iterator(), "\n"), diff.size(), is(0));
+	}
+
+	public static void requireMinimumVersion(MysqlIsolatedServer server, MysqlVersion minimum) {
+		// skips this test if running an older MYSQL version
+		assumeTrue(server.getVersion().atLeast(minimum));
 	}
 }

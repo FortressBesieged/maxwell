@@ -7,6 +7,7 @@ import com.zendesk.maxwell.producer.MaxwellOutputConfig;
 import com.zendesk.maxwell.row.RowMap;
 import com.zendesk.maxwell.schema.SchemaStoreSchema;
 import org.apache.commons.lang3.ArrayUtils;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.sql.ResultSet;
@@ -462,6 +463,18 @@ public class MaxwellIntegrationTest extends MaxwellTestWithIsolatedServer {
 	}
 
 	@Test
+	public void testHeartbeatsWithBlacklist() throws Exception {
+		Filter filter = new Filter("blacklist: maxwell.*");
+		getRowsForSQL(filter, testTransactions);
+
+		ResultSet rs = server.query("select * from maxwell.positions");
+		rs.next();
+
+		Long heartbeatRead = rs.getLong("last_heartbeat_read");
+		assertTrue(heartbeatRead > 0);
+	}
+
+	@Test
 	public void testRunMinimalBinlog() throws Exception {
 		requireMinimumVersion(server.VERSION_5_6);
 
@@ -518,6 +531,8 @@ public class MaxwellIntegrationTest extends MaxwellTestWithIsolatedServer {
 
 	@Test
 	public void testLowerCasingSensitivity() throws Exception {
+		org.junit.Assume.assumeTrue(MysqlIsolatedServer.getVersion().lessThan(8,0));
+
 		MysqlIsolatedServer lowerCaseServer = new MysqlIsolatedServer();
 
 
@@ -530,7 +545,7 @@ public class MaxwellIntegrationTest extends MaxwellTestWithIsolatedServer {
 			"insert into `test`.`tootootwee` set id = 5"
 		};
 
-		List<RowMap> rows = MaxwellTestSupport.getRowsWithReplicator(lowerCaseServer, null, sql, null);
+		List<RowMap> rows = MaxwellTestSupport.getRowsWithReplicator(lowerCaseServer, sql, null, null);
 		assertThat(rows.size(), is(1));
 		assertThat(rows.get(0).getTable(), is("tootootwee"));
 	}
@@ -585,6 +600,32 @@ public class MaxwellIntegrationTest extends MaxwellTestWithIsolatedServer {
 	public void testJson() throws Exception {
 		requireMinimumVersion(server.VERSION_5_7);
 		runJSON("/json/test_json");
+	}
+
+	@Test
+	public void testJavascriptFilters() throws Exception {
+		requireMinimumVersion(server.VERSION_5_6);
+
+		String dir = MaxwellTestSupport.getSQLDir();
+		List<RowMap> rows = runJSON("/json/test_javascript_filters", (c) -> {
+			c.javascriptFile = dir + "/json/filter.javascript";
+			c.outputConfig.includesRowQuery = true;
+		});
+
+		boolean foundPartitionString = false;
+		for ( RowMap row : rows ) {
+			if ( row.getPartitionString() != null )
+				foundPartitionString = true;
+		}
+		assertTrue(foundPartitionString);
+	}
+
+	@Test
+	public void testJavascriptFiltersInjectRichValues() throws Exception {
+		String dir = MaxwellTestSupport.getSQLDir();
+		runJSON("/json/test_javascript_filters_rich_values", (c) -> {
+			c.javascriptFile = dir + "/json/filter_rich.javascript";
+		});
 	}
 
 	static String[] createDBSql = {
@@ -674,9 +715,10 @@ public class MaxwellIntegrationTest extends MaxwellTestWithIsolatedServer {
 	@Test
 	public void testRowQueryLogEventsIsOn() throws Exception {
 		requireMinimumVersion(server.VERSION_5_6);
-		MaxwellOutputConfig outputConfig = new MaxwellOutputConfig();
+		final MaxwellOutputConfig outputConfig = new MaxwellOutputConfig();
 		outputConfig.includesRowQuery = true;
 
-		runJSON("/json/test_row_query_log_is_on", outputConfig);
+		runJSON("/json/test_row_query_log_is_on", (c) -> c.outputConfig = outputConfig);
 	}
+
 }

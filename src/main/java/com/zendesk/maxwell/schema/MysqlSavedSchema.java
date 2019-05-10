@@ -330,6 +330,7 @@ public class MysqlSavedSchema {
 		}
 	}
 
+	/* build up a map-of-maps from schema_id -> { col -> val } */
 	private HashMap<Long, HashMap<String, Object>> buildSchemaMap(Connection conn) throws SQLException {
 		HashMap<Long, HashMap<String, Object>> schemas = new HashMap<>();
 
@@ -346,6 +347,12 @@ public class MysqlSavedSchema {
 		rs.close();
 		return schemas;
 	}
+
+	/*
+		builds a linked list of schema_ids in which the head of the list
+		is the fullly-captured inital schema, and the tail is the final
+		delta-schema
+	 */
 
 	private LinkedList<Long> buildSchemaChain(HashMap<Long, HashMap<String, Object>> schemas, Long schema_id) {
 		LinkedList<Long> schemaChain = new LinkedList<>();
@@ -463,7 +470,7 @@ public class MysqlSavedSchema {
 
 		Database currentDatabase = null;
 		Table currentTable = null;
-		int columnIndex = 0;
+		short columnIndex = 0;
 
 		while (rs.next()) {
 			// Database
@@ -606,35 +613,12 @@ public class MysqlSavedSchema {
 		this.schema = s;
 	}
 
-	private void ensureSchemaID() {
-		if ( this.schemaID == null ) {
-			throw new RuntimeException("Can't destroy uninitialized schema!");
-		}
-	}
-
 	private void setPosition(Position position) {
 		this.position = position;
 	}
 
 	public static void delete(Connection connection, long schema_id) throws SQLException {
 		connection.createStatement().execute("update `schemas` set deleted = 1 where id = " + schema_id);
-	}
-
-	public void destroy(Connection connection) throws SQLException {
-		ensureSchemaID();
-
-		String[] tables = { "databases", "tables", "columns" };
-		connection.createStatement().execute("delete from `schemas` where id = " + schemaID);
-		for ( String tName : tables ) {
-			connection.createStatement().execute("delete from `" + tName + "` where schema_id = " + schemaID);
-		}
-	}
-
-	public boolean schemaExists(Connection connection, long schema_id) throws SQLException {
-		if ( this.schemaID == null )
-			return false;
-		ResultSet rs = connection.createStatement().executeQuery("select id from `schemas` where id = " + schema_id);
-		return rs.next();
 	}
 
 	public BinlogPosition getBinlogPosition() {
